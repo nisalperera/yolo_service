@@ -1,0 +1,4 @@
+sensor_msgs/Image image
+---
+sensor_msgs/Image image_detections
+yolo_service/Detection[] detections

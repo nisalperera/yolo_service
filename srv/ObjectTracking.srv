@@ -1,0 +1,4 @@
+sensor_msgs/Image image
+---
+sensor_msgs/Image tracked_image
+string[] tracked_objects

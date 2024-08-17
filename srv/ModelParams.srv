@@ -1,0 +1,8 @@
+# Request
+string model_name  # Name of the model (options: v8, v9, v10)
+string task        # Task to be performed (options: det, seg, pose, obb)
+string model_version # Version of the model (options: n, m, l and other versions)
+
+# Response
+bool success
+string message
