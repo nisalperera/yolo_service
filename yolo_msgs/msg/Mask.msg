@@ -5,4 +5,4 @@ int32 height
 int32 width
 
 # mask data represeted by the points of the border of the mask
-yolo_service/Point2D[] data
+yolo_msgs/Point2D[] data

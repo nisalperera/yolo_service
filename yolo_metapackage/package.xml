@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>yolo_metapackage</name>
+  <version>0.0.1</version>
+  <description>Metapackage for grouping YOLO ROS2 related packages</description>
+  <maintainer email="chinthanapereranisal@gmail.com">Nisal Chinthana Perera</maintainer>
+  <license>Apache 2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- List each package you want to include in the metapackage -->
+  <exec_depend>yolo_detection</exec_depend>
+  <exec_depend>yolo_msgs</exec_depend>
+  <exec_depend>yolo_bringup</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <architecture_independent/>
+  </export>
+</package>

@@ -1,4 +1,0 @@
-sensor_msgs/Image image
----
-sensor_msgs/Image pose_image
-string[] keypoints_3d
