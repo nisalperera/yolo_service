@@ -1,0 +1,5 @@
+opencv-python
+typing-extensions
+ultralytics
+super_gradients
+lap
