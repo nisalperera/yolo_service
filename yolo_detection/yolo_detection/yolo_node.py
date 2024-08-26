@@ -17,17 +17,14 @@
 from typing import List, Dict
 
 import rclpy
+from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from rclpy.qos import QoSHistoryPolicy
 from rclpy.qos import QoSDurabilityPolicy
 from rclpy.qos import QoSReliabilityPolicy
-from rclpy.lifecycle import LifecycleNode
-from rclpy.lifecycle import TransitionCallbackReturn
-from rclpy.lifecycle import LifecycleState
 
 from cv_bridge import CvBridge
 
-import torch
 from ultralytics import YOLO, NAS
 from ultralytics.engine.results import Results
 from ultralytics.engine.results import Boxes
@@ -45,48 +42,32 @@ from yolo_msgs.msg import Detection
 from yolo_msgs.msg import DetectionArray
 
 
-class Yolov8Node(LifecycleNode):
-
+class Yolov8Node(Node):
     def __init__(self) -> None:
         super().__init__("yolo_node")
 
-        # params
+        # Declare parameters
         self.declare_parameter("model_type", "YOLO")
         self.declare_parameter("model", "yolov8m.pt")
         self.declare_parameter("device", "cuda:0")
         self.declare_parameter("threshold", 0.5)
         self.declare_parameter("enable", True)
-        self.declare_parameter("image_reliability",
-                               QoSReliabilityPolicy.BEST_EFFORT)
+        self.declare_parameter("image_reliability", QoSReliabilityPolicy.BEST_EFFORT)
 
         self.type_to_model = {
             "YOLO": YOLO,
             "NAS": NAS
         }
 
-        self.get_logger().info("Yolov8 Node created")
+        # Get parameter values
+        self.model_type = self.get_parameter("model_type").value
+        self.model = self.get_parameter("model").value
+        self.device = self.get_parameter("device").value
+        self.threshold = self.get_parameter("threshold").value
+        self.enable = self.get_parameter("enable").value
+        self.reliability = self.get_parameter("image_reliability").value
 
-    def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"Configuring {self.get_name()}")
-
-        self.model_type = self.get_parameter(
-            "model_type").get_parameter_value().string_value
-
-        self.model = self.get_parameter(
-            "model").get_parameter_value().string_value
-
-        self.device = self.get_parameter(
-            "device").get_parameter_value().string_value
-
-        self.threshold = self.get_parameter(
-            "threshold").get_parameter_value().double_value
-
-        self.enable = self.get_parameter(
-            "enable").get_parameter_value().bool_value
-
-        self.reliability = self.get_parameter(
-            "image_reliability").get_parameter_value().integer_value
-
+        # Set up QoS profile
         self.image_qos_profile = QoSProfile(
             reliability=self.reliability,
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -94,29 +75,9 @@ class Yolov8Node(LifecycleNode):
             depth=1
         )
 
-        self._pub = self.create_lifecycle_publisher(
-            DetectionArray, "detections", 10)
-        self._srv = self.create_service(
-            SetBool, "enable", self.enable_cb
-        )
-        self.cv_bridge = CvBridge()
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def enable_cb(self, request, response):
-        self.enable = request.data
-        response.success = True
-        return response
-
-    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"Activating {self.get_name()}")
-
-        self.yolo = self.type_to_model[self.model_type](self.model)
-
-        if "v10" not in self.model:
-            self.yolo.fuse()
-
-        # subs
+        # Create publisher, subscriber, and service
+        self._pub = self.create_publisher(DetectionArray, "detections", 10)
+        self._srv = self.create_service(SetBool, "enable", self.enable_cb)
         self._sub = self.create_subscription(
             Image,
             "image_raw",
@@ -124,33 +85,19 @@ class Yolov8Node(LifecycleNode):
             self.image_qos_profile
         )
 
-        super().on_activate(state)
+        self.cv_bridge = CvBridge()
 
-        return TransitionCallbackReturn.SUCCESS
+        # Initialize YOLO model
+        self.yolo = self.type_to_model[self.model_type](self.model)
+        if "v10" not in self.model:
+            self.yolo.fuse()
 
-    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"Deactivating {self.get_name()}")
+        self.get_logger().info("Yolov8 Node created and initialized")
 
-        del self.yolo
-        if "cuda" in self.device:
-            self.get_logger().info("Clearing CUDA cache")
-            torch.cuda.empty_cache()
-
-        self.destroy_subscription(self._sub)
-        self._sub = None
-
-        super().on_deactivate(state)
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"Cleaning up {self.get_name()}")
-
-        self.destroy_publisher(self._pub)
-
-        del self.image_qos_profile
-
-        return TransitionCallbackReturn.SUCCESS
+    def enable_cb(self, request, response):
+        self.enable = request.data
+        response.success = True
+        return response
 
     def parse_hypothesis(self, results: Results) -> List[Dict]:
 
@@ -324,8 +271,9 @@ class Yolov8Node(LifecycleNode):
 def main():
     rclpy.init()
     node = Yolov8Node()
-    node.trigger_configure()
-    node.trigger_activate()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+
+if __name__=="__main__":
+    main()
