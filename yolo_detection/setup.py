@@ -1,6 +1,16 @@
+import os
+import sys
+import pathlib
+import subprocess
+
+from glob import glob
 from setuptools import setup
 
 package_name = 'yolo_detection'
+
+__base__ = pathlib.Path(__file__).parent.resolve()
+
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', os.path.join(__base__, "requirements.txt")])
 
 setup(
     name=package_name,
@@ -10,6 +20,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        # (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools', "opencv-python", "typing-extensions", "ultralytics", "lap"],
     zip_safe=True,
@@ -21,7 +33,7 @@ setup(
     entry_points={
         'console_scripts': [
                 'yolo_node = yolo_detection.yolo_node:main',
-                'debug_node = yolo_detection.debug_node:main',
+                # 'debug_node = yolo_detection.debug_node:main',
         ],
     },
 )

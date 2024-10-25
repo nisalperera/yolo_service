@@ -28,7 +28,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(get_package_share_directory(
-                    "yolo_bringup"), "launch", "yolov8.launch.py")),
+                    "yolo_launch"), "launch", "yolov8.launch.py")),
             launch_arguments={
                 "model": LaunchConfiguration("model", default="yolov10m.pt"),
                 "tracker": LaunchConfiguration("tracker", default="bytetrack.yaml"),

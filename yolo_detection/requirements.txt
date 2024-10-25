@@ -1,0 +1,4 @@
+opencv-python
+typing-extensions
+ultralytics
+lap
