@@ -1,16 +1,9 @@
 import os
-import sys
-import pathlib
-import subprocess
 
 from glob import glob
 from setuptools import setup
 
 package_name = 'yolo_detection'
-
-__base__ = pathlib.Path(__file__).parent.resolve()
-
-subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', os.path.join(__base__, "requirements.txt")])
 
 setup(
     name=package_name,
@@ -20,16 +13,16 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        # (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py'))
     ],
-    install_requires=['setuptools', "opencv-python", "typing-extensions", "ultralytics", "lap"],
+    install_requires=["opencv-python>=4.5.5.64", "typing-extensions>=4.8.0", "ultralytics>=8.2.103", "lap>=0.3.0"],
+    setup_requires=["opencv-python>=4.5.5.64", "typing-extensions>=4.8.0", "ultralytics>=8.2.103", "lap>=0.3.0"],
     zip_safe=True,
     maintainer='Nisal Chinthana Perera',
     maintainer_email='chinthanapereranisal@gmail.com',
     description='YOLO package for ROS2',
     license='Apache 2.0',
-    extras_require={'test': ['pytest']},
+    # extras_require={'test': ['pytest']},
     entry_points={
         'console_scripts': [
                 'yolo_node = yolo_detection.yolo_node:main',

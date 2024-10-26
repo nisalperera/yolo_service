@@ -2,3 +2,4 @@ opencv-python
 typing-extensions
 ultralytics
 lap
+numpy==1.24.4
