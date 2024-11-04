@@ -1,9 +1,7 @@
-# defines a YOLOv8 detection result
+# defines a YOLO detection result
 
-# class probability
-int32 class_id
-string class_name
-float64 score
+# frame reference
+string frame_id
 
 # ID for tracking
 string id
@@ -23,3 +21,5 @@ yolo_msgs/KeyPoint2DArray keypoints
 
 # keypoints for human pose estimation
 yolo_msgs/KeyPoint3DArray keypoints3d
+
+yolo_msgs/OrientedBoundingBox obb

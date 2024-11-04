@@ -14,7 +14,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-from typing import List, Dict
+from typing import List, Dict, Tuple
+
+import torch
 
 import rclpy
 from rclpy.node import Node
@@ -35,6 +37,7 @@ from std_srvs.srv import SetBool
 from sensor_msgs.msg import Image
 from yolo_msgs.msg import Point2D
 from yolo_msgs.msg import BoundingBox2D
+from yolo_msgs.msg import OrientedBoundingBox
 from yolo_msgs.msg import Mask
 from yolo_msgs.msg import KeyPoint2D
 from yolo_msgs.msg import KeyPoint2DArray
@@ -49,7 +52,7 @@ class Yolov8Node(Node):
         # Declare parameters
         self.declare_parameter("model_type", "YOLO")
         self.declare_parameter("model", "yolov8m.pt")
-        self.declare_parameter("device", "cuda:0")
+        self.declare_parameter("device", "cuda" if torch.cuda.is_available() else "cpu")
         self.declare_parameter("threshold", 0.5)
         self.declare_parameter("enable", True)
         self.declare_parameter("image_reliability", QoSReliabilityPolicy.BEST_EFFORT)
@@ -72,7 +75,7 @@ class Yolov8Node(Node):
             reliability=self.reliability,
             history=QoSHistoryPolicy.KEEP_LAST,
             durability=QoSDurabilityPolicy.VOLATILE,
-            depth=1
+            depth=5
         )
 
         # Create publisher, subscriber, and service
@@ -92,98 +95,79 @@ class Yolov8Node(Node):
         if "v10" not in self.model:
             self.yolo.fuse()
 
-        self.get_logger().info("Yolov8 Node created and initialized")
+        self.logger = self.get_logger()
+        self.logger.info("Yolov8 Node created and initialized")
 
     def enable_cb(self, request, response):
         self.enable = request.data
         response.success = True
         return response
 
-    def parse_hypothesis(self, results: Results) -> List[Dict]:
+    def parse_hypothesis(self, results: Results) -> Dict[List[Dict]]:
 
-        hypothesis_list = []
+        metadata = {}
 
         if results.boxes:
-            box_data: Boxes
+            hypothesis_list = []
             for box_data in results.boxes:
-                hypothesis = {
+                meta = {
                     "class_id": int(box_data.cls),
                     "class_name": self.yolo.names[int(box_data.cls)],
                     "score": float(box_data.conf)
                 }
-                hypothesis_list.append(hypothesis)
+                hypothesis_list.append(meta)
 
-        elif results.obb:
+            metadata["boxes"] = hypothesis_list
+
+        if results.obb:
+            hypothesis_list = []
             for i in range(results.obb.cls.shape[0]):
-                hypothesis = {
+                meta = {
                     "class_id": int(results.obb.cls[i]),
                     "class_name": self.yolo.names[int(results.obb.cls[i])],
                     "score": float(results.obb.conf[i])
                 }
-                hypothesis_list.append(hypothesis)
+                hypothesis_list.append(meta)
 
-        return hypothesis_list
+        return metadata
 
-    def parse_boxes(self, results: Results) -> List[BoundingBox2D]:
+    def parse_boxes(self, results: Results) -> Tuple[List[BoundingBox2D], List[OrientedBoundingBox]]:
 
         boxes_list = []
+        oriented_boxes_list = []
 
         if results.boxes:
-            box_data: Boxes
             for box_data in results.boxes:
 
                 msg = BoundingBox2D()
 
                 # get boxes values
-                box = box_data.xywh[0]
-                msg.center.position.x = float(box[0])
-                msg.center.position.y = float(box[1])
-                msg.size.x = float(box[2])
-                msg.size.y = float(box[3])
+                box = box_data.xyxy[0]
+                msg.top.x = float(box[0])
+                msg.top.y = float(box[1])
+                msg.bottom.x = float(box[2])
+                msg.bottom.y = float(box[3])
 
                 # append msg
                 boxes_list.append(msg)
 
         elif results.obb:
             for i in range(results.obb.cls.shape[0]):
-                msg = BoundingBox2D()
+                msg = OrientedBoundingBox()
 
                 # get boxes values
-                box = results.obb.xywhr[i]
-                msg.center.position.x = float(box[0])
-                msg.center.position.y = float(box[1])
-                msg.center.theta = float(box[4])
-                msg.size.x = float(box[2])
-                msg.size.y = float(box[3])
+                box = results.obb.xyxyr[i]
+                msg.top.x = float(box[0])
+                msg.top.y = float(box[1])
+                msg.theta = float(box[4])
+                msg.bottom.x = float(box[2])
+                msg.bottom.y = float(box[3])
 
                 # append msg
-                boxes_list.append(msg)
+                oriented_boxes_list.append(msg)
 
-        return boxes_list
+        return boxes_list, oriented_boxes_list
 
-    def parse_masks(self, results: Results) -> List[Mask]:
-
-        masks_list = []
-
-        def create_point2d(x: float, y: float) -> Point2D:
-            p = Point2D()
-            p.x = x
-            p.y = y
-            return p
-
-        mask: Masks
-        for mask in results.masks:
-
-            msg = Mask()
-
-            msg.data = [create_point2d(float(ele[0]), float(ele[1]))
-                        for ele in mask.xy[0].tolist()]
-            msg.height = results.orig_img.shape[0]
-            msg.width = results.orig_img.shape[1]
-
-            masks_list.append(msg)
-
-        return masks_list
 
     def parse_keypoints(self, results: Results) -> List[KeyPoint2DArray]:
 
@@ -215,9 +199,10 @@ class Yolov8Node(Node):
 
     def image_cb(self, msg: Image) -> None:
 
+        self.logger.info(f"YOLO object detection service enabled: {self.enable}")
         if self.enable:
-
             # convert image + predict
+            self.logger.info(f"Image recieved: {msg != None}")
             cv_image = self.cv_bridge.imgmsg_to_cv2(msg)
             results = self.yolo.predict(
                 source=cv_image,
@@ -230,10 +215,7 @@ class Yolov8Node(Node):
 
             if results.boxes or results.obb:
                 hypothesis = self.parse_hypothesis(results)
-                boxes = self.parse_boxes(results)
-
-            if results.masks:
-                masks = self.parse_masks(results)
+                boxes, oriented_boxes = self.parse_boxes(results)
 
             if results.keypoints:
                 keypoints = self.parse_keypoints(results)
@@ -262,6 +244,7 @@ class Yolov8Node(Node):
 
             # publish detections
             detections_msg.header = msg.header
+            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(cv_image)
             self._pub.publish(detections_msg)
 
             del results

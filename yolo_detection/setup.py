@@ -26,7 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
                 'yolo_node = yolo_detection.yolo_node:main',
-                # 'debug_node = yolo_detection.debug_node:main',
+                'viz_node = yolo_detection.viz_node:main',
         ],
     },
 )
