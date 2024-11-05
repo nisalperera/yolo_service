@@ -45,7 +45,7 @@ from yolo_msgs.msg import Detection
 from yolo_msgs.msg import DetectionArray
 
 
-class Yolov8Node(Node):
+class YOLONode(Node):
     def __init__(self) -> None:
         super().__init__("yolo_node")
 
@@ -103,106 +103,69 @@ class Yolov8Node(Node):
         response.success = True
         return response
 
-    def parse_hypothesis(self, results: Results) -> Dict[List[Dict]]:
+    def convert_to_detection_msg(self, result, frame_id):
+        detection_array = DetectionArray()
+        detection_array.header.frame_id = frame_id
+        detection_array.header.stamp = self.get_clock().now().to_msg()
 
-        metadata = {}
+        for i, det in enumerate(result):
+            detection = Detection()
+            detection.frame_id = frame_id
+            detection.id = str(i)
+            
+            # Convert bounding box
+            box = det.boxes[0]
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            
+            detection.bbox = BoundingBox2D()
+            detection.bbox.top = Point2D()
+            detection.bbox.top.x = int(x1)
+            detection.bbox.top.y = int(y1)
+            detection.bbox.bottom = Point2D()
+            detection.bbox.bottom.x = int(x2)
+            detection.bbox.bottom.y = int(y2)
+            detection.bbox.class_id = int(box.cls)
+            detection.bbox.class_name = result.names[int(box.cls)]
+            detection.bbox.score = float(box.conf)
 
-        if results.boxes:
-            hypothesis_list = []
-            for box_data in results.boxes:
-                meta = {
-                    "class_id": int(box_data.cls),
-                    "class_name": self.yolo.names[int(box_data.cls)],
-                    "score": float(box_data.conf)
-                }
-                hypothesis_list.append(meta)
+            # Convert segmentation mask if available
+            if hasattr(det, 'masks') and det.masks is not None:
+                mask = det.masks[0]
+                detection.mask = Mask()
+                detection.mask.height = mask.shape[0]
+                detection.mask.width = mask.shape[1]
+                # Get mask contours
+                contours = mask.xy[0]
+                for point in contours:
+                    p = Point2D()
+                    p.x = int(point[0])
+                    p.y = int(point[1])
+                    detection.mask.data.append(p)
 
-            metadata["boxes"] = hypothesis_list
+            # Convert keypoints if available
+            if hasattr(det, 'keypoints') and det.keypoints is not None:
+                keypoints = det.keypoints[0]
+                detection.keypoints = KeyPoint2DArray()
+                
+                for idx, kp in enumerate(keypoints):
+                    keypoint = KeyPoint2D()
+                    keypoint.id = idx
+                    keypoint.point = Point2D()
+                    keypoint.point.x = int(kp[0])
+                    keypoint.point.y = int(kp[1])
+                    keypoint.score = float(kp[2]) if len(kp) > 2 else 1.0
+                    detection.keypoints.data.append(keypoint)
 
-        if results.obb:
-            hypothesis_list = []
-            for i in range(results.obb.cls.shape[0]):
-                meta = {
-                    "class_id": int(results.obb.cls[i]),
-                    "class_name": self.yolo.names[int(results.obb.cls[i])],
-                    "score": float(results.obb.conf[i])
-                }
-                hypothesis_list.append(meta)
+            detection_array.detections.append(detection)
 
-        return metadata
-
-    def parse_boxes(self, results: Results) -> Tuple[List[BoundingBox2D], List[OrientedBoundingBox]]:
-
-        boxes_list = []
-        oriented_boxes_list = []
-
-        if results.boxes:
-            for box_data in results.boxes:
-
-                msg = BoundingBox2D()
-
-                # get boxes values
-                box = box_data.xyxy[0]
-                msg.top.x = float(box[0])
-                msg.top.y = float(box[1])
-                msg.bottom.x = float(box[2])
-                msg.bottom.y = float(box[3])
-
-                # append msg
-                boxes_list.append(msg)
-
-        elif results.obb:
-            for i in range(results.obb.cls.shape[0]):
-                msg = OrientedBoundingBox()
-
-                # get boxes values
-                box = results.obb.xyxyr[i]
-                msg.top.x = float(box[0])
-                msg.top.y = float(box[1])
-                msg.theta = float(box[4])
-                msg.bottom.x = float(box[2])
-                msg.bottom.y = float(box[3])
-
-                # append msg
-                oriented_boxes_list.append(msg)
-
-        return boxes_list, oriented_boxes_list
-
-
-    def parse_keypoints(self, results: Results) -> List[KeyPoint2DArray]:
-
-        keypoints_list = []
-
-        points: Keypoints
-        for points in results.keypoints:
-
-            msg_array = KeyPoint2DArray()
-
-            if points.conf is None:
-                continue
-
-            for kp_id, (p, conf) in enumerate(zip(points.xy[0], points.conf[0])):
-
-                if conf >= self.threshold:
-                    msg = KeyPoint2D()
-
-                    msg.id = kp_id + 1
-                    msg.point.x = float(p[0])
-                    msg.point.y = float(p[1])
-                    msg.score = float(conf)
-
-                    msg_array.data.append(msg)
-
-            keypoints_list.append(msg_array)
-
-        return keypoints_list
+        return detection_array
 
     def image_cb(self, msg: Image) -> None:
 
         self.logger.info(f"YOLO object detection service enabled: {self.enable}")
         if self.enable:
             # convert image + predict
-            self.logger.info(f"Image recieved: {msg != None}")
+            self.logger.info(f"Image recieved: {msg != None} and Frame ID: {msg.header.frame_id}")
             cv_image = self.cv_bridge.imgmsg_to_cv2(msg)
             results = self.yolo.predict(
                 source=cv_image,
@@ -213,34 +176,10 @@ class Yolov8Node(Node):
             )
             results: Results = results[0].cpu()
 
-            if results.boxes or results.obb:
-                hypothesis = self.parse_hypothesis(results)
-                boxes, oriented_boxes = self.parse_boxes(results)
-
-            if results.keypoints:
-                keypoints = self.parse_keypoints(results)
-
-            # create detection msgs
-            detections_msg = DetectionArray()
-
-            for i in range(len(results)):
-
-                aux_msg = Detection()
-
-                if results.boxes or results.obb:
-                    aux_msg.class_id = hypothesis[i]["class_id"]
-                    aux_msg.class_name = hypothesis[i]["class_name"]
-                    aux_msg.score = hypothesis[i]["score"]
-
-                    aux_msg.bbox = boxes[i]
-
-                if results.masks:
-                    aux_msg.mask = masks[i]
-
-                if results.keypoints:
-                    aux_msg.keypoints = keypoints[i]
-
-                detections_msg.detections.append(aux_msg)
+            detections_msg = self.convert_to_detection_msg(
+                                results, 
+                                msg.header.frame_id
+                            )
 
             # publish detections
             detections_msg.header = msg.header
@@ -253,7 +192,7 @@ class Yolov8Node(Node):
 
 def main():
     rclpy.init()
-    node = Yolov8Node()
+    node = YOLONode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

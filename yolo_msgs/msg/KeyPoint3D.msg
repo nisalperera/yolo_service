@@ -3,8 +3,8 @@
 # id of the keypoint
 int32 id
 
-# 3D point in meters
-geometry_msgs/Point point
+# 3D point
+yolo_msgs/Point3D point
 
 # conf of the keypoint
 float64 score
