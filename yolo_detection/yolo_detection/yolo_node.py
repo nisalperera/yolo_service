@@ -55,7 +55,7 @@ class YOLONode(Node):
         self.declare_parameter("device", "cuda" if torch.cuda.is_available() else "cpu")
         self.declare_parameter("threshold", 0.5)
         self.declare_parameter("enable", True)
-        self.declare_parameter("image_reliability", QoSReliabilityPolicy.BEST_EFFORT)
+        self.declare_parameter("image_reliability", QoSReliabilityPolicy.RELIABLE)
 
         self.type_to_model = {
             "YOLO": YOLO,
@@ -79,12 +79,12 @@ class YOLONode(Node):
         )
 
         # Create publisher, subscriber, and service
-        self._pub = self.create_publisher(DetectionArray, "detections", 10)
-        self._srv = self.create_service(SetBool, "enable", self.enable_cb)
+        self._pub = self.create_publisher(DetectionArray, "detections", self.image_qos_profile)
+        self._srv = self.create_service(SetBool, "enable", self.enable_callback)
         self._sub = self.create_subscription(
             Image,
             "image_raw",
-            self.image_cb,
+            self.image_callback,
             self.image_qos_profile
         )
 
@@ -96,9 +96,9 @@ class YOLONode(Node):
             self.yolo.fuse()
 
         self.logger = self.get_logger()
-        self.logger.info("Yolov8 Node created and initialized")
+        self.logger.info(f"{self.__class__.__name__} Node created and initialized")
 
-    def enable_cb(self, request, response):
+    def enable_callback(self, request, response):
         self.enable = request.data
         response.success = True
         return response
@@ -160,13 +160,11 @@ class YOLONode(Node):
 
         return detection_array
 
-    def image_cb(self, msg: Image) -> None:
+    def image_callback(self, msg: Image) -> None:
 
-        self.logger.info(f"YOLO object detection service enabled: {self.enable}")
         if self.enable:
             # convert image + predict
-            self.logger.info(f"Image recieved: {msg != None} and Frame ID: {msg.header.frame_id}")
-            cv_image = self.cv_bridge.imgmsg_to_cv2(msg)
+            cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             results = self.yolo.predict(
                 source=cv_image,
                 verbose=False,
@@ -183,7 +181,7 @@ class YOLONode(Node):
 
             # publish detections
             detections_msg.header = msg.header
-            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(cv_image)
+            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(cv_image, header=msg.header, encoding="rgb8")
             self._pub.publish(detections_msg)
 
             del results

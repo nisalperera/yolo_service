@@ -39,7 +39,7 @@ class VizNode(Node):
 
         # Declare parameters
         self.declare_parameter("enable", True)
-        self.declare_parameter("image_reliability", QoSReliabilityPolicy.BEST_EFFORT)
+        self.declare_parameter("image_reliability", QoSReliabilityPolicy.RELIABLE)
 
 
         # Get parameter values
@@ -56,45 +56,39 @@ class VizNode(Node):
 
         # Create publisher, subscriber, and service
         self._pub = self.create_publisher(Image, "viz", 10)
-        self._srv = self.create_service(SetBool, "enable", self.enable_cb)
+        self._srv = self.create_service(SetBool, "enable", self.enable_callback)
         self._sub = self.create_subscription(
             DetectionArray, 
             "detections",
-            self.image_cb,
+            self.image_callback,
             self.image_qos_profile
         )
-
-        # self._sub_image = self.create_subscription(
-        #     Image,
-        #     "image_raw",
-        #     self.image_cb,
-        #     self.image_qos_profile
-        # )
 
         self.cv_bridge = CvBridge()
 
         self.logger = self.get_logger()
-        self.logger.info("YOLO Viz Node created and initialized")
+        self.logger.info(f"{self.__class__.__name__} Node created and initialized")
 
-    def enable_cb(self, request, response):
+    def enable_callback(self, request, response):
         self.enable = request.data
         response.success = True
         return response
 
-    def image_cb(self, msg: DetectionArray) -> None:
+    def image_callback(self, msg: DetectionArray) -> None:
 
         if self.enable:
-            # convert image + predict
-            cv_image = self.cv_bridge.imgmsg_to_cv2(msg.image)
+            # convert image visualize
+            cv_image = self.cv_bridge.imgmsg_to_cv2(msg.image, desired_encoding='bgr8')
             
-            if msg.detections.bbox:
-                for bbox in msg.detections.bbox:
-                    start = (bbox.top.x, bbox.top.y)
-                    end = (bbox.bottom.x, bbox.bottom.y)
-                    cv_image = cv2.rectangle(cv_image, start, end, (0, 0, 255), 2)
+            for detection in msg.detections:
+                # for bbox in detection.bbox:
+                start = (detection.bbox.top.x, detection.bbox.top.y)
+                end = (detection.bbox.bottom.x, detection.bbox.bottom.y)
+                cv_image = cv2.rectangle(cv_image, start, end, (0, 0, 255), 2)
+                cv_image = cv2.putText(cv_image, detection.bbox.class_name, start, cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 2)
 
             # publish detections
-            viz_image = self.cv_bridge.cv2_to_imgmsg(cv_image)
+            viz_image = self.cv_bridge.cv2_to_imgmsg(cv_image, encoding='rgb8', header=msg.image.header)
             self._pub.publish(viz_image)
 
             del cv_image
