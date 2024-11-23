@@ -1,8 +1,5 @@
 # defines a YOLO detection result
 
-# frame reference
-string frame_id
-
 # ID for tracking
 string id
 

@@ -10,6 +10,11 @@ def generate_launch_description():
         "namespace",
         default_value="yolo",
         description="Namespace for the nodes")
+    visualize = DeclareLaunchArgument(
+        "visualize",
+        default_value=True,
+        description="Whether to use Visualizations"
+    )
 
     #
     # NODES
@@ -22,9 +27,8 @@ def generate_launch_description():
     )
 
     ld = LaunchDescription()
-
     ld.add_action(namespace_cmd)
-
     ld.add_action(detector_node_cmd)
+    ld.add_action(visualize)
 
     return ld

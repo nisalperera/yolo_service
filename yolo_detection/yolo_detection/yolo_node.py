@@ -17,6 +17,7 @@
 from typing import List, Dict, Tuple
 
 import torch
+import message_filters
 
 import rclpy
 from rclpy.node import Node
@@ -29,9 +30,6 @@ from cv_bridge import CvBridge
 
 from ultralytics import YOLO, NAS
 from ultralytics.engine.results import Results
-from ultralytics.engine.results import Boxes
-from ultralytics.engine.results import Masks
-from ultralytics.engine.results import Keypoints
 
 from std_srvs.srv import SetBool
 from sensor_msgs.msg import Image
@@ -56,7 +54,11 @@ class YOLONode(Node):
         self.declare_parameter("threshold", 0.5)
         self.declare_parameter("enable", True)
         self.declare_parameter("image_reliability", QoSReliabilityPolicy.RELIABLE)
-
+        self.declare_parameter("to_posestamped", False)
+        self.declare_parameter("to_pointcloud", False)
+        self.declare_parameter("log_image", False)
+        self.declare_parameter("visualize", False)
+        self.declare_parameter("stereo_vision", False)
         self.type_to_model = {
             "YOLO": YOLO,
             "NAS": NAS
@@ -69,6 +71,12 @@ class YOLONode(Node):
         self.threshold = self.get_parameter("threshold").value
         self.enable = self.get_parameter("enable").value
         self.reliability = self.get_parameter("image_reliability").value
+        self.to_posestamped = self.get_parameter("to_posestamped").value
+        self.to_pointcloud = self.get_parameter("to_pointcloud").value
+        self.log_image = self.get_parameter("log_image").value
+        self.visualize = self.get_parameter("visualize").value
+        stereo_vision = self.get_parameter("stereo_vision").value
+
 
         # Set up QoS profile
         self.image_qos_profile = QoSProfile(
@@ -79,14 +87,40 @@ class YOLONode(Node):
         )
 
         # Create publisher, subscriber, and service
-        self._pub = self.create_publisher(DetectionArray, "detections", self.image_qos_profile)
         self._srv = self.create_service(SetBool, "enable", self.enable_callback)
-        self._sub = self.create_subscription(
-            Image,
-            "image_raw",
-            self.image_callback,
-            self.image_qos_profile
-        )
+        if stereo_vision:
+            self.right_publish = self.create_publisher(DetectionArray, "right_detections", self.image_qos_profile)
+            self.left_publish = self.create_publisher(DetectionArray, "left_detections", self.image_qos_profile)
+
+            self.right_sub = message_filters.Subscriber(
+                self,
+                Image,
+                "/right_camera/image_raw",
+                qos_profile=self.image_qos_profile
+            )
+            self.left_sub = message_filters.Subscriber(
+                self,
+                Image,
+                "/left_camera/image_raw",
+                qos_profile=self.image_qos_profile
+            )
+
+            self.ts = message_filters.ApproximateTimeSynchronizer(
+                [self.right_sub, self.left_sub], 
+                queue_size=10, 
+                slop=0.1
+            )
+
+            self.ts.registerCallback(self.stereo_image_callback)
+        
+        else:
+            self._publish = self.create_publisher(DetectionArray, "detections", self.image_qos_profile)
+            self._subscribe = self.create_subscription(
+                Image,
+                "image_raw",
+                self.single_image_callback,
+                qos_profile=self.image_qos_profile
+            )
 
         self.cv_bridge = CvBridge()
 
@@ -96,21 +130,24 @@ class YOLONode(Node):
             self.yolo.fuse()
 
         self.logger = self.get_logger()
-        self.logger.info(f"{self.__class__.__name__} Node created and initialized")
+        self.logged = False
+        self.logger.info(f"{self.__class__.__name__} Node created and initialized. Using {'Stereo Vision' if stereo_vision else 'Mono Vision'}")
 
     def enable_callback(self, request, response):
         self.enable = request.data
         response.success = True
         return response
 
-    def convert_to_detection_msg(self, result, frame_id):
+    def convert_to_detection_msg(self, result, frame_id=None):
         detection_array = DetectionArray()
-        detection_array.header.frame_id = frame_id
+        if frame_id:
+            detection_array.header.frame_id = frame_id
         detection_array.header.stamp = self.get_clock().now().to_msg()
 
         for i, det in enumerate(result):
             detection = Detection()
-            detection.frame_id = frame_id
+            if frame_id:
+                detection.header.frame_id = frame_id
             detection.id = str(i)
             
             # Convert bounding box
@@ -159,33 +196,83 @@ class YOLONode(Node):
             detection_array.detections.append(detection)
 
         return detection_array
+    
+    def stereo_predict(self, right_image, left_image, right_image_header, left_image_header) -> None:
+        results: Results = self.yolo.predict(
+                source=[right_image, left_image],
+                verbose=False,
+                stream=False,
+                conf=self.threshold,
+                device=self.device
+            )
 
-    def image_callback(self, msg: Image) -> None:
+        right_detections_msg = self.convert_to_detection_msg(
+                                results[0].cpu()
+                            )
+        left_detections_msg = self.convert_to_detection_msg(
+                                results[1].cpu()
+                            )
+
+        # publish detections
+        if self.visualize:
+            right_detections_msg.image = self.cv_bridge.cv2_to_imgmsg(right_image, header=right_image_header, encoding="rgb8")
+            left_detections_msg.image = self.cv_bridge.cv2_to_imgmsg(left_image, header=left_image_header, encoding="rgb8")
+        else:
+            right_detections_msg.image = None
+            left_detections_msg.image = None
+
+        self.right_publish.publish(right_detections_msg)
+        self.left_publish.publish(left_detections_msg)
+
+        del results
+        del right_detections_msg
+        del left_detections_msg
+
+    def stereo_image_callback(self, right_img_msg: Image, left_img_msg: Image) -> None:
 
         if self.enable:
-            # convert image + predict
-            cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            results = self.yolo.predict(
+            if not self.logged:
+                self.logger.info("1st Image received and performing detections.")
+                self.logged = True
+
+            right_image = self.cv_bridge.imgmsg_to_cv2(right_img_msg, desired_encoding='bgr8')
+            right_image_header = right_img_msg.header
+            left_image = self.cv_bridge.imgmsg_to_cv2(left_img_msg, desired_encoding='bgr8')
+            left_image_header = left_img_msg.header
+            self.stereo_predict(right_image, left_image, right_image_header, left_image_header)
+
+    def single_predict(self, cv_image) -> None:
+        results: Results = self.yolo.predict(
                 source=cv_image,
                 verbose=False,
                 stream=False,
                 conf=self.threshold,
                 device=self.device
             )
-            results: Results = results[0].cpu()
 
-            detections_msg = self.convert_to_detection_msg(
-                                results, 
-                                msg.header.frame_id
+        detections_msg = self.convert_to_detection_msg(
+                                results[0].cpu()
                             )
 
-            # publish detections
-            detections_msg.header = msg.header
-            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(cv_image, header=msg.header, encoding="rgb8")
-            self._pub.publish(detections_msg)
+        # publish detections
+        if self.visualize:
+            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(self.right_image, header=self.right_image_header, encoding="rgb8")
+        else:
+            detections_msg.image = None
 
-            del results
-            del cv_image
+        self._publish(detections_msg)
+
+        del results
+        del detections_msg
+
+    def single_image_callback(self, img_msg: Image) -> None:
+
+        if self.enable:
+            if not self.logged:
+                self.logger.info("1st Image received and performing detections.")
+                self.logged = True
+
+            self.single_predict(self.cv_bridge.imgmsg_to_cv2(img_msg, desired_encoding='bgr8'))
 
 
 def main():

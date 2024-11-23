@@ -1,3 +1,5 @@
+import torch
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
@@ -24,7 +26,7 @@ def generate_launch_description():
     device = LaunchConfiguration("device")
     device_cmd = DeclareLaunchArgument(
         "device",
-        default_value="cuda:0",
+        default_value="cuda" if torch.cuda.is_available() else "cpu",
         description="Device to use (GPU/CPU)")
 
     enable = LaunchConfiguration("enable")

@@ -17,8 +17,9 @@
 from typing import List, Dict
 
 import cv2
-
 import rclpy
+import message_filters
+
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from rclpy.qos import QoSHistoryPolicy
@@ -33,18 +34,20 @@ from sensor_msgs.msg import Image
 from yolo_msgs.msg import DetectionArray
 
 
-class VizNode(Node):
+class YOLOVizNode(Node):
     def __init__(self) -> None:
         super().__init__("yolo_viz_node")
 
         # Declare parameters
         self.declare_parameter("enable", True)
         self.declare_parameter("image_reliability", QoSReliabilityPolicy.RELIABLE)
+        self.declare_parameter("log_image", True)
 
 
         # Get parameter values
         self.enable = self.get_parameter("enable").value
         self.reliability = self.get_parameter("image_reliability").value
+        self.log_image = self.get_parameter("log_image").value
 
         # Set up QoS profile
         self.image_qos_profile = QoSProfile(
@@ -55,7 +58,7 @@ class VizNode(Node):
         )
 
         # Create publisher, subscriber, and service
-        self._pub = self.create_publisher(Image, "viz", 10)
+        self._pub = self.create_publisher(Image, "viz", self.image_qos_profile)
         self._srv = self.create_service(SetBool, "enable", self.enable_callback)
         self._sub = self.create_subscription(
             DetectionArray, 
@@ -63,6 +66,31 @@ class VizNode(Node):
             self.image_callback,
             self.image_qos_profile
         )
+
+        # Create stereo publisher, subscriber
+        self.right_publish = self.create_publisher(Image, "right_viz", self.image_qos_profile)
+        self.left_publish = self.create_publisher(Image, "left_viz", self.image_qos_profile)
+
+        self.right_detections = message_filters.Subscriber(
+            self,
+            DetectionArray,
+            "right_detections",
+            qos_profile=self.image_qos_profile
+        )
+        self.left_detections = message_filters.Subscriber(
+            self,
+            DetectionArray,
+            "left_detections",
+            qos_profile=self.image_qos_profile
+        )
+
+        self.ts = message_filters.ApproximateTimeSynchronizer(
+            [self.right_detections, self.left_detections], 
+            queue_size=10, 
+            slop=0.1
+        )
+
+        self.ts.registerCallback(self.stereo_image_callback)
 
         self.cv_bridge = CvBridge()
 
@@ -77,6 +105,11 @@ class VizNode(Node):
     def image_callback(self, msg: DetectionArray) -> None:
 
         if self.enable:
+
+            if not self.logged:
+                self.logger.info("1st Detections received and start processing.")
+                self.logged = True
+
             # convert image visualize
             cv_image = self.cv_bridge.imgmsg_to_cv2(msg.image, desired_encoding='bgr8')
             
@@ -94,10 +127,52 @@ class VizNode(Node):
             del cv_image
             del viz_image
 
+    def stereo_image_callback(self, right_msg: DetectionArray, left_msg: DetectionArray) -> None:
+
+        if self.enable:
+
+            if not self.logged:
+                self.logger.info("1st Detections received and start processing.")
+                self.logged = True
+
+            # convert image visualize
+            right_image = self.cv_bridge.imgmsg_to_cv2(right_msg.image, desired_encoding='bgr8')
+            
+            for detection in right_msg.detections:
+                # for bbox in detection.bbox:
+                start = (detection.bbox.top.x, detection.bbox.top.y)
+                end = (detection.bbox.bottom.x, detection.bbox.bottom.y)
+                right_image = cv2.rectangle(right_image, start, end, (0, 0, 255), 2)
+                right_image = cv2.putText(right_image, detection.bbox.class_name, start, cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 2)
+
+            # publish detections
+            right_viz_image = self.cv_bridge.cv2_to_imgmsg(right_image, encoding='rgb8', header=right_msg.image.header)
+
+            left_image = self.cv_bridge.imgmsg_to_cv2(left_msg.image, desired_encoding='bgr8')
+            
+            for detection in left_msg.detections:
+                # for bbox in detection.bbox:
+                start = (detection.bbox.top.x, detection.bbox.top.y)
+                end = (detection.bbox.bottom.x, detection.bbox.bottom.y)
+                left_image = cv2.rectangle(left_image, start, end, (0, 0, 255), 2)
+                left_image = cv2.putText(left_image, detection.bbox.class_name, start, cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 2)
+
+            # publish detections
+            left_viz_image = self.cv_bridge.cv2_to_imgmsg(left_image, encoding='rgb8', header=left_msg.image.header)
+            
+            self.right_publish.publish(right_viz_image)
+            self.left_publish.publish(left_viz_image)
+
+            del right_image
+            del right_viz_image
+
+            del left_image
+            del left_viz_image
+
 
 def main():
     rclpy.init()
-    node = VizNode()
+    node = YOLOVizNode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
