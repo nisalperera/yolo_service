@@ -11,7 +11,7 @@
   <!-- List each package you want to include in the metapackage -->
   <exec_depend>yolo_detection</exec_depend>
   <exec_depend>yolo_msgs</exec_depend>
-  <exec_depend>yolo_bringup</exec_depend>
+  <!-- <exec_depend>yolo_launch</exec_depend> -->
 
   <export>
     <build_type>ament_cmake</build_type>

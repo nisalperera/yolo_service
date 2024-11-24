@@ -1,12 +1,7 @@
-# defines a YOLOv8 detection result
-
-# class probability
-int32 class_id
-string class_name
-float64 score
+# defines a YOLO detection result
 
 # ID for tracking
-string id
+int32 id
 
 # 2D bounding box surrounding the object in pixels
 yolo_msgs/BoundingBox2D bbox
@@ -23,3 +18,5 @@ yolo_msgs/KeyPoint2DArray keypoints
 
 # keypoints for human pose estimation
 yolo_msgs/KeyPoint3DArray keypoints3d
+
+yolo_msgs/OrientedBoundingBox obb

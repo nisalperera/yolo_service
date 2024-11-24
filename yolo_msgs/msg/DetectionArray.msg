@@ -2,3 +2,4 @@
 
 std_msgs/Header header
 yolo_msgs/Detection[] detections
+sensor_msgs/Image image

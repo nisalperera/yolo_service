@@ -1,0 +1,9 @@
+local_costmap:
+  ros__parameters:
+    plugins: ["obstacle_layer", "yolo_detection"]
+    yolo_detection:
+      plugin: "yolo_detection/YOLODetectionLayer"
+      enabled: True
+      topic: "/object_detections"
+      cost_scaling_factor: 10.0
+      inflation_radius: 0.5

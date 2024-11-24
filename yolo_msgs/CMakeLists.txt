@@ -6,13 +6,16 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Point2D.msg"
+  "msg/Point3D.msg"
   "msg/Vector2.msg"
   "msg/Pose2D.msg"
   "msg/BoundingBox2D.msg"
   "msg/BoundingBox3D.msg"
+  "msg/OrientedBoundingBox.msg"
   "msg/Mask.msg"
   "msg/KeyPoint2D.msg"
   "msg/KeyPoint2DArray.msg"
@@ -20,7 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/KeyPoint3DArray.msg"
   "msg/Detection.msg"
   "msg/DetectionArray.msg"
-  DEPENDENCIES std_msgs geometry_msgs
+  DEPENDENCIES std_msgs geometry_msgs sensor_msgs
 )
 
 ament_package()

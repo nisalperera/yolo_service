@@ -1,6 +1,5 @@
 opencv-python
 typing-extensions
 ultralytics
-super_gradients
 lap
 numpy==1.24.4

@@ -1,5 +1,8 @@
 # 2D position and orientation of the bounding box center
-yolo_msgs/Pose2D center
+yolo_msgs/Point2D top
+yolo_msgs/Point2D bottom
 
-# total size of the bounding box, in pixels, surrounding the object's center
-yolo_msgs/Vector2 size
+# class probability
+int32 class_id
+string class_name
+float64 score

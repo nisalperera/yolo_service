@@ -14,7 +14,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-from typing import List, Dict
+from typing import List, Dict, Tuple
+
+import torch
+import message_filters
 
 import rclpy
 from rclpy.node import Node
@@ -27,14 +30,12 @@ from cv_bridge import CvBridge
 
 from ultralytics import YOLO, NAS
 from ultralytics.engine.results import Results
-from ultralytics.engine.results import Boxes
-from ultralytics.engine.results import Masks
-from ultralytics.engine.results import Keypoints
 
 from std_srvs.srv import SetBool
 from sensor_msgs.msg import Image
 from yolo_msgs.msg import Point2D
 from yolo_msgs.msg import BoundingBox2D
+from yolo_msgs.msg import OrientedBoundingBox
 from yolo_msgs.msg import Mask
 from yolo_msgs.msg import KeyPoint2D
 from yolo_msgs.msg import KeyPoint2DArray
@@ -42,18 +43,22 @@ from yolo_msgs.msg import Detection
 from yolo_msgs.msg import DetectionArray
 
 
-class Yolov8Node(Node):
+class YOLONode(Node):
     def __init__(self) -> None:
         super().__init__("yolo_node")
 
         # Declare parameters
         self.declare_parameter("model_type", "YOLO")
         self.declare_parameter("model", "yolov8m.pt")
-        self.declare_parameter("device", "cuda:0")
+        self.declare_parameter("device", "cuda" if torch.cuda.is_available() else "cpu")
         self.declare_parameter("threshold", 0.5)
         self.declare_parameter("enable", True)
-        self.declare_parameter("image_reliability", QoSReliabilityPolicy.BEST_EFFORT)
-
+        self.declare_parameter("image_reliability", QoSReliabilityPolicy.RELIABLE)
+        self.declare_parameter("to_posestamped", False)
+        self.declare_parameter("to_pointcloud", False)
+        self.declare_parameter("log_image", False)
+        self.declare_parameter("visualize", False)
+        self.declare_parameter("stereo_vision", False)
         self.type_to_model = {
             "YOLO": YOLO,
             "NAS": NAS
@@ -66,24 +71,56 @@ class Yolov8Node(Node):
         self.threshold = self.get_parameter("threshold").value
         self.enable = self.get_parameter("enable").value
         self.reliability = self.get_parameter("image_reliability").value
+        self._to_posestamped = self.get_parameter("to_posestamped").value
+        self._to_pointcloud = self.get_parameter("to_pointcloud").value
+        self.log_image = self.get_parameter("log_image").value
+        self.visualize = self.get_parameter("visualize").value
+        stereo_vision = self.get_parameter("stereo_vision").value
+
 
         # Set up QoS profile
         self.image_qos_profile = QoSProfile(
             reliability=self.reliability,
             history=QoSHistoryPolicy.KEEP_LAST,
             durability=QoSDurabilityPolicy.VOLATILE,
-            depth=1
+            depth=5
         )
 
         # Create publisher, subscriber, and service
-        self._pub = self.create_publisher(DetectionArray, "detections", 10)
-        self._srv = self.create_service(SetBool, "enable", self.enable_cb)
-        self._sub = self.create_subscription(
-            Image,
-            "image_raw",
-            self.image_cb,
-            self.image_qos_profile
-        )
+        self._srv = self.create_service(SetBool, "enable", self.enable_callback)
+        if stereo_vision:
+            self.right_publish = self.create_publisher(DetectionArray, "right_detections", self.image_qos_profile)
+            self.left_publish = self.create_publisher(DetectionArray, "left_detections", self.image_qos_profile)
+
+            self.right_sub = message_filters.Subscriber(
+                self,
+                Image,
+                "/right_camera/image_raw",
+                qos_profile=self.image_qos_profile
+            )
+            self.left_sub = message_filters.Subscriber(
+                self,
+                Image,
+                "/left_camera/image_raw",
+                qos_profile=self.image_qos_profile
+            )
+
+            self.ts = message_filters.ApproximateTimeSynchronizer(
+                [self.right_sub, self.left_sub], 
+                queue_size=10, 
+                slop=0.1
+            )
+
+            self.ts.registerCallback(self.stereo_image_callback)
+        
+        else:
+            self._publish = self.create_publisher(DetectionArray, "detections", self.image_qos_profile)
+            self._subscribe = self.create_subscription(
+                Image,
+                "image_raw",
+                self.single_image_callback,
+                qos_profile=self.image_qos_profile
+            )
 
         self.cv_bridge = CvBridge()
 
@@ -92,185 +129,162 @@ class Yolov8Node(Node):
         if "v10" not in self.model:
             self.yolo.fuse()
 
-        self.get_logger().info("Yolov8 Node created and initialized")
+        self.logger = self.get_logger()
+        self.logged = {"stereo_image_callback": False, "single_image_callback": False}
+        self.logger.info(f"{self.__class__.__name__} Node created and initialized. Using {'Stereo Vision' if stereo_vision else 'Mono Vision'}")
 
-    def enable_cb(self, request, response):
+    def enable_callback(self, request, response):
         self.enable = request.data
         response.success = True
         return response
 
-    def parse_hypothesis(self, results: Results) -> List[Dict]:
+    def convert_to_detection_msg(self, result, frame_id=None):
+        detection_array = DetectionArray()
+        if frame_id:
+            detection_array.header.frame_id = frame_id
+        detection_array.header.stamp = self.get_clock().now().to_msg()
 
-        hypothesis_list = []
+        for det in result:
+            self.logger.debug(f"Boxes: {det.boxes}, Tracking ID: {det.boxes.id}")
+            self.logger.debug(f"Masks: {det.masks}, Tracking ID: {det.boxes.id}")
+            self.logger.debug(f"Keypoints: {det.keypoints}, Tracking ID: {det.boxes.id}")
+            detection = Detection()
+            if frame_id:
+                detection.header.frame_id = frame_id
 
-        if results.boxes:
-            box_data: Boxes
-            for box_data in results.boxes:
-                hypothesis = {
-                    "class_id": int(box_data.cls),
-                    "class_name": self.yolo.names[int(box_data.cls)],
-                    "score": float(box_data.conf)
-                }
-                hypothesis_list.append(hypothesis)
+            detection.id = int(det.boxes.id.item())
+            
+            x1, y1, x2, y2 = det.boxes.xyxy.squeeze().cpu().numpy()
+            
+            detection.bbox = BoundingBox2D()
+            detection.bbox.top = Point2D()
+            detection.bbox.top.x = int(x1)
+            detection.bbox.top.y = int(y1)
+            detection.bbox.bottom = Point2D()
+            detection.bbox.bottom.x = int(x2)
+            detection.bbox.bottom.y = int(y2)
+            detection.bbox.class_id = int(det.boxes.cls)
+            detection.bbox.class_name = result.names[int(det.boxes.cls)]
+            detection.bbox.score = float(det.boxes.conf)
 
-        elif results.obb:
-            for i in range(results.obb.cls.shape[0]):
-                hypothesis = {
-                    "class_id": int(results.obb.cls[i]),
-                    "class_name": self.yolo.names[int(results.obb.cls[i])],
-                    "score": float(results.obb.conf[i])
-                }
-                hypothesis_list.append(hypothesis)
+            # Convert segmentation mask if available
+            if hasattr(det, 'masks') and det.masks is not None:
+                mask = det.masks[0]
+                detection.mask = Mask()
+                detection.mask.height = mask.shape[0]
+                detection.mask.width = mask.shape[1]
+                # Get mask contours
+                contours = mask.xy[0]
+                for point in contours:
+                    p = Point2D()
+                    p.x = int(point[0])
+                    p.y = int(point[1])
+                    detection.mask.data.append(p)
 
-        return hypothesis_list
+            # Convert keypoints if available
+            if hasattr(det, 'keypoints') and det.keypoints is not None:
+                keypoints = det.keypoints[0]
+                detection.keypoints = KeyPoint2DArray()
+                
+                for idx, kp in enumerate(keypoints):
+                    keypoint = KeyPoint2D()
+                    keypoint.id = idx
+                    keypoint.point = Point2D()
+                    keypoint.point.x = int(kp[0])
+                    keypoint.point.y = int(kp[1])
+                    keypoint.score = float(kp[2]) if len(kp) > 2 else 1.0
+                    detection.keypoints.data.append(keypoint)
 
-    def parse_boxes(self, results: Results) -> List[BoundingBox2D]:
+            detection_array.detections.append(detection)
 
-        boxes_list = []
+        return detection_array
 
-        if results.boxes:
-            box_data: Boxes
-            for box_data in results.boxes:
+    def to_posestamped(self) -> str:
+        return
+    
+    def stereo_predict(self, right_image, left_image, right_image_header, left_image_header) -> None:
+        results: Results = self.yolo.track(
+                source=[left_image, right_image],
+                verbose=False,
+                stream=False,
+                conf=self.threshold,
+                device=self.device
+            )
 
-                msg = BoundingBox2D()
+        left_detections_msg = self.convert_to_detection_msg(
+                                results[0].cpu()
+                            )
+        
+        right_detections_msg = self.convert_to_detection_msg(
+                                results[1].cpu()
+                            )
 
-                # get boxes values
-                box = box_data.xywh[0]
-                msg.center.position.x = float(box[0])
-                msg.center.position.y = float(box[1])
-                msg.size.x = float(box[2])
-                msg.size.y = float(box[3])
+        # publish detections
+        if self.visualize:
+            right_detections_msg.image = self.cv_bridge.cv2_to_imgmsg(right_image, header=right_image_header, encoding="rgb8")
+            left_detections_msg.image = self.cv_bridge.cv2_to_imgmsg(left_image, header=left_image_header, encoding="rgb8")
+        else:
+            right_detections_msg.image = None
+            left_detections_msg.image = None
 
-                # append msg
-                boxes_list.append(msg)
+        self.right_publish.publish(right_detections_msg)
+        self.left_publish.publish(left_detections_msg)
 
-        elif results.obb:
-            for i in range(results.obb.cls.shape[0]):
-                msg = BoundingBox2D()
+        del results
+        del right_detections_msg
+        del left_detections_msg
 
-                # get boxes values
-                box = results.obb.xywhr[i]
-                msg.center.position.x = float(box[0])
-                msg.center.position.y = float(box[1])
-                msg.center.theta = float(box[4])
-                msg.size.x = float(box[2])
-                msg.size.y = float(box[3])
-
-                # append msg
-                boxes_list.append(msg)
-
-        return boxes_list
-
-    def parse_masks(self, results: Results) -> List[Mask]:
-
-        masks_list = []
-
-        def create_point2d(x: float, y: float) -> Point2D:
-            p = Point2D()
-            p.x = x
-            p.y = y
-            return p
-
-        mask: Masks
-        for mask in results.masks:
-
-            msg = Mask()
-
-            msg.data = [create_point2d(float(ele[0]), float(ele[1]))
-                        for ele in mask.xy[0].tolist()]
-            msg.height = results.orig_img.shape[0]
-            msg.width = results.orig_img.shape[1]
-
-            masks_list.append(msg)
-
-        return masks_list
-
-    def parse_keypoints(self, results: Results) -> List[KeyPoint2DArray]:
-
-        keypoints_list = []
-
-        points: Keypoints
-        for points in results.keypoints:
-
-            msg_array = KeyPoint2DArray()
-
-            if points.conf is None:
-                continue
-
-            for kp_id, (p, conf) in enumerate(zip(points.xy[0], points.conf[0])):
-
-                if conf >= self.threshold:
-                    msg = KeyPoint2D()
-
-                    msg.id = kp_id + 1
-                    msg.point.x = float(p[0])
-                    msg.point.y = float(p[1])
-                    msg.score = float(conf)
-
-                    msg_array.data.append(msg)
-
-            keypoints_list.append(msg_array)
-
-        return keypoints_list
-
-    def image_cb(self, msg: Image) -> None:
+    def stereo_image_callback(self, right_img_msg: Image, left_img_msg: Image) -> None:
 
         if self.enable:
+            if not self.logged:
+                self.logger.info("1st Image received for Stereo Vision mode and performing detections.")
+                self.logged = True
 
-            # convert image + predict
-            cv_image = self.cv_bridge.imgmsg_to_cv2(msg)
-            results = self.yolo.predict(
+            right_image = self.cv_bridge.imgmsg_to_cv2(right_img_msg, desired_encoding='bgr8')
+            right_image_header = right_img_msg.header
+            left_image = self.cv_bridge.imgmsg_to_cv2(left_img_msg, desired_encoding='bgr8')
+            left_image_header = left_img_msg.header
+            self.stereo_predict(right_image, left_image, right_image_header, left_image_header)
+
+    def single_predict(self, cv_image) -> None:
+        results: Results = self.yolo.predict(
                 source=cv_image,
                 verbose=False,
                 stream=False,
                 conf=self.threshold,
                 device=self.device
             )
-            results: Results = results[0].cpu()
 
-            if results.boxes or results.obb:
-                hypothesis = self.parse_hypothesis(results)
-                boxes = self.parse_boxes(results)
+        detections_msg = self.convert_to_detection_msg(
+                                results[0].cpu()
+                            )
 
-            if results.masks:
-                masks = self.parse_masks(results)
+        # publish detections
+        if self.visualize:
+            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(cv_image, header=self.image_header, encoding="rgb8")
+        else:
+            detections_msg.image = None
 
-            if results.keypoints:
-                keypoints = self.parse_keypoints(results)
+        self._publish(detections_msg)
 
-            # create detection msgs
-            detections_msg = DetectionArray()
+        del results
+        del detections_msg
 
-            for i in range(len(results)):
+    def single_image_callback(self, img_msg: Image) -> None:
 
-                aux_msg = Detection()
+        if self.enable:
+            if not self.logged:
+                self.logger.info("1st Image received for Mono Vision mode and performing detections.")
+                self.logged = True
 
-                if results.boxes or results.obb:
-                    aux_msg.class_id = hypothesis[i]["class_id"]
-                    aux_msg.class_name = hypothesis[i]["class_name"]
-                    aux_msg.score = hypothesis[i]["score"]
-
-                    aux_msg.bbox = boxes[i]
-
-                if results.masks:
-                    aux_msg.mask = masks[i]
-
-                if results.keypoints:
-                    aux_msg.keypoints = keypoints[i]
-
-                detections_msg.detections.append(aux_msg)
-
-            # publish detections
-            detections_msg.header = msg.header
-            self._pub.publish(detections_msg)
-
-            del results
-            del cv_image
+            self.image_header = img_msg.header
+            self.single_predict(self.cv_bridge.imgmsg_to_cv2(img_msg, desired_encoding='bgr8'))
 
 
 def main():
     rclpy.init()
-    node = Yolov8Node()
+    node = YOLONode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
