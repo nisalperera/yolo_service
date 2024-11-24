@@ -71,8 +71,8 @@ class YOLONode(Node):
         self.threshold = self.get_parameter("threshold").value
         self.enable = self.get_parameter("enable").value
         self.reliability = self.get_parameter("image_reliability").value
-        self.to_posestamped = self.get_parameter("to_posestamped").value
-        self.to_pointcloud = self.get_parameter("to_pointcloud").value
+        self._to_posestamped = self.get_parameter("to_posestamped").value
+        self._to_pointcloud = self.get_parameter("to_pointcloud").value
         self.log_image = self.get_parameter("log_image").value
         self.visualize = self.get_parameter("visualize").value
         stereo_vision = self.get_parameter("stereo_vision").value
@@ -130,7 +130,7 @@ class YOLONode(Node):
             self.yolo.fuse()
 
         self.logger = self.get_logger()
-        self.logged = False
+        self.logged = {"stereo_image_callback": False, "single_image_callback": False}
         self.logger.info(f"{self.__class__.__name__} Node created and initialized. Using {'Stereo Vision' if stereo_vision else 'Mono Vision'}")
 
     def enable_callback(self, request, response):
@@ -199,7 +199,7 @@ class YOLONode(Node):
 
         return detection_array
 
-    def to_poststamped(self) -> str:
+    def to_posestamped(self) -> str:
         return
     
     def stereo_predict(self, right_image, left_image, right_image_header, left_image_header) -> None:
@@ -238,7 +238,7 @@ class YOLONode(Node):
 
         if self.enable:
             if not self.logged:
-                self.logger.info("1st Image received and performing detections.")
+                self.logger.info("1st Image received for Stereo Vision mode and performing detections.")
                 self.logged = True
 
             right_image = self.cv_bridge.imgmsg_to_cv2(right_img_msg, desired_encoding='bgr8')
@@ -262,7 +262,7 @@ class YOLONode(Node):
 
         # publish detections
         if self.visualize:
-            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(self.right_image, header=self.right_image_header, encoding="rgb8")
+            detections_msg.image = self.cv_bridge.cv2_to_imgmsg(cv_image, header=self.image_header, encoding="rgb8")
         else:
             detections_msg.image = None
 
@@ -275,9 +275,10 @@ class YOLONode(Node):
 
         if self.enable:
             if not self.logged:
-                self.logger.info("1st Image received and performing detections.")
+                self.logger.info("1st Image received for Mono Vision mode and performing detections.")
                 self.logged = True
 
+            self.image_header = img_msg.header
             self.single_predict(self.cv_bridge.imgmsg_to_cv2(img_msg, desired_encoding='bgr8'))
 
 

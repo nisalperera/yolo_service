@@ -25,8 +25,11 @@ setup(
     # extras_require={'test': ['pytest']},
     entry_points={
         'console_scripts': [
-                'detector = yolo_detection.yolo_node:main',
-                'visualizer = yolo_detection.viz_node:main',
+            'detector = yolo_detection.yolo_node:main',
+            'visualizer = yolo_detection.viz_node:main',
+        ],
+        'nav2_costmap_2d.layer': [
+            'yolo_detection_layer = yolo_detection.yolo_layer:YOLODetectionLayer'
         ],
     },
 )
