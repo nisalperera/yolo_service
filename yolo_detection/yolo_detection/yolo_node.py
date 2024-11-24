@@ -144,15 +144,17 @@ class YOLONode(Node):
             detection_array.header.frame_id = frame_id
         detection_array.header.stamp = self.get_clock().now().to_msg()
 
-        for i, det in enumerate(result):
+        for det in result:
+            self.logger.debug(f"Boxes: {det.boxes}, Tracking ID: {det.boxes.id}")
+            self.logger.debug(f"Masks: {det.masks}, Tracking ID: {det.boxes.id}")
+            self.logger.debug(f"Keypoints: {det.keypoints}, Tracking ID: {det.boxes.id}")
             detection = Detection()
             if frame_id:
                 detection.header.frame_id = frame_id
-            detection.id = str(i)
+
+            detection.id = int(det.boxes.id.item())
             
-            # Convert bounding box
-            box = det.boxes[0]
-            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            x1, y1, x2, y2 = det.boxes.xyxy.squeeze().cpu().numpy()
             
             detection.bbox = BoundingBox2D()
             detection.bbox.top = Point2D()
@@ -161,9 +163,9 @@ class YOLONode(Node):
             detection.bbox.bottom = Point2D()
             detection.bbox.bottom.x = int(x2)
             detection.bbox.bottom.y = int(y2)
-            detection.bbox.class_id = int(box.cls)
-            detection.bbox.class_name = result.names[int(box.cls)]
-            detection.bbox.score = float(box.conf)
+            detection.bbox.class_id = int(det.boxes.cls)
+            detection.bbox.class_name = result.names[int(det.boxes.cls)]
+            detection.bbox.score = float(det.boxes.conf)
 
             # Convert segmentation mask if available
             if hasattr(det, 'masks') and det.masks is not None:
@@ -196,20 +198,24 @@ class YOLONode(Node):
             detection_array.detections.append(detection)
 
         return detection_array
+
+    def to_poststamped(self) -> str:
+        return
     
     def stereo_predict(self, right_image, left_image, right_image_header, left_image_header) -> None:
-        results: Results = self.yolo.predict(
-                source=[right_image, left_image],
+        results: Results = self.yolo.track(
+                source=[left_image, right_image],
                 verbose=False,
                 stream=False,
                 conf=self.threshold,
                 device=self.device
             )
 
-        right_detections_msg = self.convert_to_detection_msg(
+        left_detections_msg = self.convert_to_detection_msg(
                                 results[0].cpu()
                             )
-        left_detections_msg = self.convert_to_detection_msg(
+        
+        right_detections_msg = self.convert_to_detection_msg(
                                 results[1].cpu()
                             )
 

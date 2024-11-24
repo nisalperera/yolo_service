@@ -39,9 +39,9 @@ class YOLOVizNode(Node):
         super().__init__("yolo_viz_node")
 
         # Declare parameters
-        self.declare_parameter("enable", True)
+        self.declare_parameter("enable", False)
         self.declare_parameter("image_reliability", QoSReliabilityPolicy.RELIABLE)
-        self.declare_parameter("log_image", True)
+        self.declare_parameter("log_image", False)
 
 
         # Get parameter values
@@ -93,9 +93,10 @@ class YOLOVizNode(Node):
         self.ts.registerCallback(self.stereo_image_callback)
 
         self.cv_bridge = CvBridge()
-
+        
+        self.logged = False
         self.logger = self.get_logger()
-        self.logger.info(f"{self.__class__.__name__} Node created and initialized")
+        self.logger.info(f"{self.__class__.__name__} Node created and initialized.")
 
     def enable_callback(self, request, response):
         self.enable = request.data

@@ -1,7 +1,7 @@
 # defines a YOLO detection result
 
 # ID for tracking
-string id
+int32 id
 
 # 2D bounding box surrounding the object in pixels
 yolo_msgs/BoundingBox2D bbox

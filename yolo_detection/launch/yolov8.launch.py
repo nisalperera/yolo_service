@@ -32,13 +32,13 @@ def generate_launch_description():
     enable = LaunchConfiguration("enable")
     enable_cmd = DeclareLaunchArgument(
         "enable",
-        default_value="True",
+        default_value=True,
         description="Whether to start YOLOv8 enabled")
 
     threshold = LaunchConfiguration("threshold")
     threshold_cmd = DeclareLaunchArgument(
         "threshold",
-        default_value="0.5",
+        default_value=0.5,
         description="Minimum probability of a detection to be published")
 
     input_image_topic = LaunchConfiguration("input_image_topic")
@@ -50,8 +50,8 @@ def generate_launch_description():
     image_reliability = LaunchConfiguration("image_reliability")
     image_reliability_cmd = DeclareLaunchArgument(
         "image_reliability",
-        default_value="1",
-        choices=["0", "1", "2"],
+        default_value=1,
+        choices=[0, 1, 2],
         description="Specific reliability QoS of the input image topic (0=system default, 1=Reliable, 2=Best Effort)")
 
     namespace = LaunchConfiguration("namespace")
@@ -59,6 +59,12 @@ def generate_launch_description():
         "namespace",
         default_value="yolo",
         description="Namespace for the nodes")
+    
+    visualize = DeclareLaunchArgument(
+        "visualize",
+        default_value=True,
+        description="Whether to use Visualizations"
+    )
 
     #
     # NODES
@@ -75,6 +81,7 @@ def generate_launch_description():
             "enable": enable,
             "threshold": threshold,
             "image_reliability": image_reliability,
+            "visualize": visualize,
         }],
         remappings=[("image_raw", input_image_topic)]
     )

@@ -25,8 +25,8 @@ setup(
     # extras_require={'test': ['pytest']},
     entry_points={
         'console_scripts': [
-                'yolo_node = yolo_detection.yolo_node:main',
-                'viz_node = yolo_detection.viz_node:main',
+                'detector = yolo_detection.yolo_node:main',
+                'visualizer = yolo_detection.viz_node:main',
         ],
     },
 )
