@@ -144,17 +144,17 @@ class YOLONode(Node):
             detection_array.header.frame_id = frame_id
         detection_array.header.stamp = self.get_clock().now().to_msg()
 
-        for det in result:
-            self.logger.debug(f"Boxes: {det.boxes}, Tracking ID: {det.boxes.id}")
-            self.logger.debug(f"Masks: {det.masks}, Tracking ID: {det.boxes.id}")
-            self.logger.debug(f"Keypoints: {det.keypoints}, Tracking ID: {det.boxes.id}")
+        for i in range(len(result)):
+            self.logger.debug(f"Boxes: {result.boxes.xyxy[i]}, Tracking ID: {result.boxes.id[i]}")
+            self.logger.debug(f"Masks: {result.masks.xy[i]}, Tracking ID: {result.boxes.id[i]}")
+            self.logger.debug(f"Keypoints: {result.keypoints}, Tracking ID: {result.boxes.id[i]}")
             detection = Detection()
             if frame_id:
                 detection.header.frame_id = frame_id
 
-            detection.id = int(det.boxes.id.item())
+            detection.id = int(result.boxes.id[i].item())
             
-            x1, y1, x2, y2 = det.boxes.xyxy.squeeze().cpu().numpy()
+            x1, y1, x2, y2 = result.boxes.xyxy[i].cpu().numpy()
             
             detection.bbox = BoundingBox2D()
             detection.bbox.top = Point2D()
@@ -163,18 +163,19 @@ class YOLONode(Node):
             detection.bbox.bottom = Point2D()
             detection.bbox.bottom.x = int(x2)
             detection.bbox.bottom.y = int(y2)
-            detection.bbox.class_id = int(det.boxes.cls)
-            detection.bbox.class_name = result.names[int(det.boxes.cls)]
-            detection.bbox.score = float(det.boxes.conf)
+            detection.bbox.class_id = int(result.boxes.cls[i])
+            detection.bbox.class_name = result.names[int(result.boxes.cls[i])]
+            detection.bbox.score = float(result.boxes.conf[i])
 
             # Convert segmentation mask if available
-            if hasattr(det, 'masks') and det.masks is not None:
-                mask = det.masks[0]
+            if hasattr(result, 'masks') and result.masks is not None:
+                mask = result.masks[i]
                 detection.mask = Mask()
                 detection.mask.height = mask.shape[0]
                 detection.mask.width = mask.shape[1]
+                detection.mask.class_id = result.boxes.cls[i]
                 # Get mask contours
-                contours = mask.xy[0]
+                contours = mask.xy[i]
                 for point in contours:
                     p = Point2D()
                     p.x = int(point[0])
@@ -182,8 +183,8 @@ class YOLONode(Node):
                     detection.mask.data.append(p)
 
             # Convert keypoints if available
-            if hasattr(det, 'keypoints') and det.keypoints is not None:
-                keypoints = det.keypoints[0]
+            if hasattr(result, 'keypoints') and result.keypoints is not None:
+                keypoints = result.keypoints[i]
                 detection.keypoints = KeyPoint2DArray()
                 
                 for idx, kp in enumerate(keypoints):
